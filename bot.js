@@ -13,7 +13,7 @@ const handleMessage = async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  if (text && !text.startsWith('/')) {
+  if (text && (msg.chat.type === 'private' || msg.chat.type === 'group' || msg.chat.type === 'supergroup')) {
     const links = parseLinks(text);
 
     if (links.length === 0) {
@@ -36,9 +36,9 @@ const convertGoogleDriveLink = (link) => {
 
 const downloadFile = async (link) => {
   if (link.includes('drive.google.com')) {
-    await downloadGoogleDrivePDF(convertGoogleDriveLink(link));
+    return await downloadGoogleDrivePDF(convertGoogleDriveLink(link));
   }
-  await downloadDirectPDF(link);
+  return await downloadDirectPDF(link);
 };
 
 const downloadDirectPDF = async (link) => {
@@ -52,15 +52,29 @@ const downloadDirectPDF = async (link) => {
 };
 
 const downloadGoogleDrivePDF = async (link) => {
-  const response = await axios.get(link, { responseType: 'stream' });
-  const contentDisposition = response.headers['content-disposition'];
-  const isPDF = contentDisposition && contentDisposition.includes('.pdf');
+  try {
+    const initialResponse = await axios.get(link, { responseType: 'text' });
 
-  if (!isPDF) {
-    throw new Error('The Google Drive link does not point directly to a PDF file.');
+    const tokenMatch = initialResponse.data.match(/confirm=([0-9A-Za-z_]+)&/);
+    const token = tokenMatch ? tokenMatch[1] : null;
+
+    const fileIdMatch = link.match(/id=([^&]+)/);
+    const fileId = fileIdMatch ? fileIdMatch[1] : null;
+    const downloadUrl = token ? `https://drive.google.com/uc?export=download&id=${fileId}&confirm=${token}` : link;
+
+    const response = await axios.get(downloadUrl, { responseType: 'arraybuffer', headers: { 'User-Agent': 'Mozilla/5.0' } });
+
+    const contentDisposition = response.headers['content-disposition'];
+    const isPDF = contentDisposition && contentDisposition.includes('.pdf');
+
+    if (!isPDF) {
+      throw new Error('The Google Drive link does not point directly to a PDF file.');
+    }
+
+    return response.data;
+  } catch (error) {
+    throw new Error('Failed to download from Google Drive.');
   }
-
-  await streamToBuffer(response.data);
 };
 
 const streamToBuffer = (stream) =>
@@ -147,7 +161,16 @@ const sendPDFDocument = async (chatId, pdfBuffer, filename) => {
   }
 };
 
-bot.onText(/\/start/, async (msg) => await sendMessage(msg.chat.id, 'Send me a list of PDF links separated by commas or new lines.'));
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+    await sendMessage(chatId, 'Send me a list of PDF links separated by commas or new lines by mentioning the bot directly.');
+  } else {
+    await sendMessage(chatId, 'Send me a list of PDF links separated by commas or new lines.');
+  }
+});
+
 bot.on('message', handleMessage);
 
-console.log('Bot running...');
+console.log('Bot is running...');
